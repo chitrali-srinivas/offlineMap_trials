@@ -448,6 +448,14 @@ create policy "allow_all_villages" on villages for all using (true) with check (
 
 document.getElementById('setup-sql').value = SETUP_SQL;
 
+// ─── CONFIG (localStorage) ────────────────────────────────────────────────────
+function getConfig() {
+  try { return JSON.parse(localStorage.getItem('farmmap_cfg') || '{}'); } catch(e) { return {}; }
+}
+function saveConfig(c) {
+  try { localStorage.setItem('farmmap_cfg', JSON.stringify(c)); } catch(e) {}
+}
+
 // ─── INIT ────────────────────────────────────────────────────────────────────
 async function initApp() {
   initMap();
