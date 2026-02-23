@@ -181,6 +181,7 @@
   }
   .toast.show { opacity: 1; }
   .toast.success { border-color: var(--success); color: var(--success); }
+  .toast.warn { border-color: var(--warn); color: var(--warn); }
   .toast.error { border-color: var(--danger); color: var(--danger); }
 
   .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); }
@@ -586,31 +587,70 @@ async function generateBoundary() {
 
 async function tryOverpass(village, district, state) {
   showLoading('Trying Overpass API...');
-  const query = `[out:json][timeout:25];
+
+  // Try multiple name variants
+  const variants = [village, village.toLowerCase(), village.toUpperCase()];
+  for (const name of variants) {
+    const query = `[out:json][timeout:25];
 (
-  relation["name"="${village}"]["boundary"="administrative"]["admin_level"~"^(7|8|9|10)$"];
-  relation["name"="${village}"]["place"="village"];
-  area["name"="${state}"]["admin_level"="4"]->.searchArea;
-  relation["name"="${village}"]["place"~"village|hamlet"](area.searchArea);
+  relation["name"="${name}"]["boundary"="administrative"];
+  relation["name"="${name}"]["place"~"village|hamlet|town"];
+  way["name"="${name}"]["place"~"village|hamlet"];
 );
 out geom;`;
-
-  try {
-    const res = await fetch('https://overpass-api.de/api/interpreter', {
-      method: 'POST', body: 'data=' + encodeURIComponent(query)
-    });
-    const data = await res.json();
-    if (data.elements && data.elements.length > 0) {
-      const geojson = overpassToGeoJSON(data.elements[0]);
-      if (geojson) {
-        currentBoundaryGeoJSON = geojson;
-        drawBoundary(geojson);
-        return;
+    try {
+      const res = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST', body: 'data=' + encodeURIComponent(query)
+      });
+      const data = await res.json();
+      if (data.elements && data.elements.length > 0) {
+        const geojson = overpassToGeoJSON(data.elements[0]);
+        if (geojson) {
+          currentBoundaryGeoJSON = geojson;
+          drawBoundary(geojson);
+          return;
+        }
       }
+    } catch(e) { console.error(e); }
+  }
+
+  // Final fallback: geocode the village and draw an approximate circle boundary
+  showLoading('Drawing approximate boundary from location...');
+  try {
+    const q = [village, district, state, 'India'].filter(Boolean).join(', ');
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`,
+      { headers: { 'Accept-Language': 'en' } }
+    );
+    const data = await res.json();
+    if (data && data.length > 0) {
+      const lat = parseFloat(data[0].lat);
+      const lon = parseFloat(data[0].lon);
+      const circle = createCircleBoundary(lat, lon, 1.2, village);
+      currentBoundaryGeoJSON = circle;
+      drawBoundary(circle);
+      showToast('Exact boundary not in OSM — approximate area drawn. Adjust if needed.', 'warn');
+      return;
     }
   } catch(e) { console.error(e); }
 
-  showToast('Boundary not found in OSM. Try a different spelling or add manually.', 'error');
+  showToast('Village not found. Check spelling or try Preview Map first.', 'error');
+}
+
+function createCircleBoundary(lat, lng, radiusKm, name) {
+  const points = 64;
+  const coords = [];
+  for (let i = 0; i <= points; i++) {
+    const angle = (i / points) * 2 * Math.PI;
+    const dlat = (radiusKm / 111.32) * Math.cos(angle);
+    const dlng = (radiusKm / (111.32 * Math.cos(lat * Math.PI / 180))) * Math.sin(angle);
+    coords.push([lng + dlng, lat + dlat]);
+  }
+  return {
+    type: 'Feature',
+    geometry: { type: 'Polygon', coordinates: [coords] },
+    properties: { name, source: 'Approximate' }
+  };
 }
 
 function overpassToGeoJSON(el) {
